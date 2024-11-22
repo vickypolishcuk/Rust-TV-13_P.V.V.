@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Chat with Auth</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        #chatContainer{
+            width: 80%;
+        }
+        #chatBox {
+            width: 100%;
+            height: 400px;
+            border: 1px solid #ccc;
+            padding: 10px;
+            margin-bottom: 10px;
+            overflow-y: scroll;
+            background-color: #f9f9f9;
+        }
+        #messageInput {
+            width: 100%;
+            padding: 10px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .form-container {
+            text-align: center;
+        }
+        #authForm, #chatContainer, #registerForm, #userSelect {
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <h1>WebSocket Chat</h1>
+    <p id="welcome-message"></p>
+
+    <!-- Форма для реєстрації -->
+    <div id="registerForm" class="form-container">
+        <h2>Register</h2>
+        <input type="text" id="newUsername" placeholder="Enter your username" required><br><br>
+        <input type="password" id="newPassword" placeholder="Enter your password" required><br><br>
+        <button onclick="register()">Register</button>
+        <p>Already have an account? <a href="javascript:void(0);" onclick="showLoginForm()">Login here</a></p>
+    </div>
+
+    <!-- Форма авторизації -->
+    <div id="authForm" class="form-container">
+        <h2>Login</h2>
+        <input type="text" id="username" placeholder="Enter your username" required><br><br>
+        <input type="password" id="password" placeholder="Enter your password" required><br><br>
+        <button onclick="login()">Login</button>
+        <p>Don't have an account? <a href="javascript:void(0);" onclick="showRegisterForm()">Register here</a></p>
+    </div>
+
+    <!-- Чат-контейнер -->
+    <div id="chatContainer">
+        <div id="chatBox"></div>
+        <input type="text" id="messageInput" placeholder="Enter your message"><br>
+        <button onclick="sendMessage()">Send</button>
+        <input type="file" id="imageInput" onchange="sendImage()" style="display:none;">
+        <button onclick="document.getElementById('imageInput').click()">Send Image</button>
+        <input type="file" id="fileInput" onchange="sendFile()" style="display:none;">
+        <button onclick="document.getElementById('fileInput').click()">Send File</button><br>
+    </div>
+
+    <!-- Форма для вибору користувача -->
+    <div id="userSelect" class="form-container">
+        <h2>Select User to Chat</h2>
+        <select id="userList">
+            <!-- Список користувачів буде додаватися динамічно -->
+        </select><br><br>
+        <button onclick="selectUser()">Start Chat</button>
+    </div>
+
+    <script>
+        //localStorage.removeItem('users'); // Очищення користувацьких даних у localStorage
+        let ws;
+        let username = '';
+        let password = '';
+        let currentChatUser = '';
+        let isAuthenticated = false;
+
+        // Отримуємо облікові записи з localStorage
+        const users = JSON.parse(localStorage.getItem('users')) || [];
+
+        // Показати форму для реєстрації
+        function showRegisterForm() {
+            document.getElementById("registerForm").style.display = "block";
+            document.getElementById("authForm").style.display = "none";
+        }
+
+        // Показати форму для авторизації
+        function showLoginForm() {
+            document.getElementById("registerForm").style.display = "none";
+            document.getElementById("authForm").style.display = "block";
+        }
+
+        // Функція для реєстрації користувача
+        function register() {
+            const user = document.getElementById("newUsername").value;
+            const pass = document.getElementById("newPassword").value;
+            if (users.some(u => u.username === user)) {
+                alert("This username is already taken!");
+                return;
+            }
+            users.push({ username: user, password: pass });
+            localStorage.setItem('users', JSON.stringify(users));
+            alert("Registration successful! You can now log in.");
+            showLoginForm(); // Перехід до форми входу після реєстрації
+        }
+
+        // Функція для заповнення списку користувачів
+        function populateUserList() {
+            const userList = document.getElementById("userList");
+            userList.innerHTML = ""; // Очищаємо список перед додаванням нових користувачів
+
+            const filteredUsers = users.filter(user => user.username !== username);
+
+            // Додаємо кожного користувача з масиву 'users' у список
+            filteredUsers.forEach(user => {
+                const option = document.createElement("option");
+                option.value = user.username;
+                option.textContent = user.username;
+                userList.appendChild(option);
+            });
+
+            // Показуємо форму вибору користувача після входу
+            document.getElementById("userSelect").style.display = "block";
+        }
+
+        // Функція для входу користувача
+        function login() {
+            const user = document.getElementById("username").value;
+            const pass = document.getElementById("password").value;
+            const existingUser = users.find(u => u.username === user && u.password === pass);
+
+            if (existingUser) {
+                username = user;
+                password = pass;
+                isAuthenticated = true;
+                document.getElementById("authForm").style.display = "none";
+                document.getElementById("userSelect").style.display = "block";
+                const welcomeMessageElement = document.getElementById('welcome-message');
+                welcomeMessageElement.textContent = `Привіт користувач ${username}!`;
+                populateUserList();
+                startWebSocket();
+            } else {
+                alert("Invalid username or password.");
+            }
+        }
+
+        // Функція для вибору користувача для чату
+        function selectUser() {
+            currentChatUser = document.getElementById("userList").value;
+
+            if (currentChatUser) {
+                // Показуємо поле для надсилання повідомлення
+                document.getElementById("chatContainer").style.display = "block";
+            } else {
+                alert("Please select a user to chat with.");
+            }
+        }
+
+        // Функція для підключення до WebSocket-сервера
+        function startWebSocket() {
+            ws = new WebSocket("ws://localhost:3030/chat");
+
+            ws.onopen = () => {
+                console.log("Connected to WebSocket server");
+                ws.send(username); // Відправка імені користувача для ідентифікації
+            };
+
+            // Обробка отриманих повідомлень
+            ws.onmessage = function(event) {
+                const message = JSON.parse(event.data);  // Розпарсити отримане повідомлення
+
+                const msgElement = document.createElement("div");
+
+                if (message.type === "text" && (message.to === username || message.username === username)) {
+                    // Якщо це текстове повідомлення, відображаємо його
+                    msgElement.innerHTML = `<strong>${message.username}</strong> (${message.to}): ${message.content}`;
+                } else if (message.type === "image" && (message.to === username || message.username === username)) {
+                    // Якщо це зображення, відображаємо його
+                    const imgElement = document.createElement("img");
+                    imgElement.src = message.content;  // Це base64-кодоване зображення
+                    imgElement.alt = "Image message";
+                    imgElement.style.maxWidth = "300px";  // Обмеження на розмір зображення
+                    msgElement.innerHTML = `<strong>${message.username}</strong> (${message.to}): <em>*фото*</em><br>`;
+                    msgElement.appendChild(imgElement);
+                } else if (message.type === "file" && (message.to === username || message.username === username)) {
+                    // Якщо це файл, відображаємо його як посилання для завантаження
+                    const link = document.createElement("a");
+                    link.href = message.content;  // Це base64-кодоване посилання на файл
+                    link.download = message.filename;  // Ім'я файлу для завантаження
+                    msgElement.innerHTML = `<strong>${message.username}</strong> (${message.to}): <em>*файл*</em><br>`;
+                    link.innerText = `${message.filename}`;
+                    msgElement.appendChild(link);
+                }
+
+                document.getElementById("chatBox").appendChild(msgElement);
+            };
+
+
+            ws.onclose = () => {
+                console.log("Connection closed");
+            };
+
+            ws.onerror = (error) => {
+                console.error("WebSocket error:", error);
+            };
+        }
+
+        // Функція для надсилання повідомлення
+        function sendMessage() {
+            const message = document.getElementById('messageInput').value;
+            if (message && isAuthenticated && currentChatUser) {
+                const messageData = {
+                    type: "text",
+                    username: username,
+                    to: currentChatUser,
+                    content: message
+                };
+                ws.send(JSON.stringify(messageData));  // Відправляємо повідомлення
+                document.getElementById('messageInput').value = '';  // Очищаємо поле вводу
+            } else {
+                alert("Please select a user and enter a message.");
+            }
+        }
+
+        function sendImage() {
+            const fileInput = document.getElementById("imageInput");
+            const file = fileInput.files[0];
+            
+            if (file && isAuthenticated && currentChatUser) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const fileData = e.target.result;  // base64-кодовані дані файлу
+                    const fileMessage = {
+                        type: "image",
+                        username: username,
+                        to: currentChatUser,
+                        content: fileData  // Відправляємо base64-кодоване зображення
+                    };
+                    ws.send(JSON.stringify(fileMessage));
+                };
+                reader.readAsDataURL(file);  // Перетворюємо файл в base64
+            } else {
+                alert("Please select a user and enter a message.");
+            }
+        }
+
+        // Функція для відправлення файлів
+        function sendFile() {
+            const fileInput = document.getElementById("fileInput");
+            const file = fileInput.files[0];
+            
+            if (file && isAuthenticated && currentChatUser) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const fileData = e.target.result;  // base64-кодовані дані файлу
+                    const fileMessage = {
+                        type: "file",
+                        username: username,
+                        to: currentChatUser,
+                        content: fileData,  // base64-кодоване вміст файлу
+                        filename: file.name  // Передаємо ім'я файлу
+                    };
+                    ws.send(JSON.stringify(fileMessage));
+                };
+                reader.readAsDataURL(file);  // Перетворюємо файл в base64
+            } else {
+                alert("Please select a user and enter a message.");
+            }
+        }
+
+        let audioRecorder;
+        let audioChunks = [];
+
+        function startRecording() {
+            navigator.mediaDevices.getUserMedia({ audio: true })
+                .then(stream => {
+                    audioRecorder = new MediaRecorder(stream);
+                    audioRecorder.ondataavailable = event => {
+                        audioChunks.push(event.data);
+                    };
+                    audioRecorder.onstop = () => {
+                        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                        const audioMessage = {
+                            type: "audio",
+                            from: username,
+                            to: currentChatUser,
+                            content: audioBlob
+                        };
+                        ws.send(JSON.stringify(audioMessage));
+                        audioChunks = [];
+                    };
+                    audioRecorder.start();
+                })
+                .catch(err => console.error("Audio recording error: ", err));
+        }
+
+        function stopRecording() {
+            audioRecorder.stop();
+        }
+
+        // Показуємо форму авторизації або реєстрації при першому відкритті
+        window.onload = function () {
+            if (isAuthenticated) {
+                document.getElementById("authForm").style.display = "none";
+                // document.getElementById("chatContainer").style.display = "block";
+                document.getElementById("userSelect").style.display = "block";
+                startWebSocket();
+            } else {
+                document.getElementById("authForm").style.display = "none";
+                document.getElementById("registerForm").style.display = "block"; // Покажемо форму реєстрації, якщо користувач ще не авторизований
+            }
+        };
+    </script>
+</body>
+</html>
